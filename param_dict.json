@@ -1,0 +1,125 @@
+{
+  "desc": "sgan-ffhq256-8gpu",
+  "train": {
+    "run_func_name": "training.training_loop.training_loop",
+    "mirror_augment": true,
+    "total_kimg": 25000
+  },
+  
+  "G": {
+    "func_name": "training.networks_stylegan.G_style"
+  },
+  
+  "D": {
+    "func_name": "training.networks_stylegan.D_basic"
+  },
+  
+  "G_opt": {
+    "beta1": 0.0, "beta2": 0.99, "epsilon": 1e-8
+  },
+  
+  "D_opt": {
+    "beta1": 0.0, "beta2": 0.99, "epsilon": 1e-8
+  },
+  
+  "G_loss": {
+    "func_name": "training.loss.G_logistic_nonsaturating"
+  },
+  
+  "D_loss": {
+    "func_name": "training.loss.D_logistic_simplegp", "r1_gamma":10.0
+  },
+  
+  "dataset": {
+    "tfrecord_dir": "ffhq", "resolution": 256
+  },
+  
+  "sched": {
+    "minibatch_base": 32,
+    "minibatch_dict": {4: 512, 8: 256, 16: 128, 32: 64, 64: 32},
+    "lod_initial_resolution": 8,
+    "G_lrate_dict": {128: 0.0015, 256: 0.002, 512: 0.003, 1024: 0.003},
+    "D_lrate_dict": {128: 0.0015, 256: 0.002, 512: 0.003, 1024: 0.003}
+  },
+  
+  "grid": {
+    "size": "4k", "layout": "random"
+  },
+  
+  "metric": [
+    {"func_name": "metrics.frechet_inception_distance.FID", "name": "fid50k", "num_images": 50000, "minibatch_per_gpu": 8}
+  ],
+  
+  "submit_config": {
+    "run_dir_root": "",
+    "run_desc": "sgan-ffhq256-8gpu",
+    "run_dir_ignore": ["__pycache__", "*.pyproj", "*.sln", "*.suo", ".cache", ".idea", ".vs", ".vscode", "results", "datasets", "cache"],
+    "run_dir_extra_files": "None",
+    "submit_target": 1,
+    "num_gpus": 8,
+    "print_info": false,
+    "ask_confirmation": false,
+    "run_id": "None",
+    "run_name": "None",
+    "run_dir": "None",
+    "run_func_name": "None",
+    "run_func_kwargs": "None",
+    "user_name": "None",
+    "task_name": "None",
+    "host_name": "localhost",
+  },
+  
+  "tf_config": {
+    "rnd.np_random_seed": 1000
+  },
+  
+  "kwargs": {
+    "run_func_name": "training.training_loop.training_loop",
+    "mirror_augment": true,
+    "total_kimg": 25000,
+    "G_args": "G sansyo",
+    "D_args": "D sansyo",
+    "G_opt_args": "G_opt sansyo",
+    "D_opt_args": "D_opt sansyo",
+    "G_loss_args": "G_loss sansyo",
+    "D_loss_args": "D_loss sansyo",
+    "dataset_args": "dataset sansyo",
+    "sched_args": "sched sansyo",
+    "grid_args": "grid sansyo",
+    "metric_arg_list": "metrics sansyo",
+    "tf_config": "tf_config sansyo",
+    "submit_config": "submit_config sansyo",
+  },
+  
+  "training_loop": {
+    "run_func_name": "training.training_loop.training_loop",
+    "mirror_augment": true,
+    "total_kimg": 25000,
+    "G_args": "G sansyo",
+    "D_args": "D sansyo",
+    "G_opt_args": "G_opt sansyo",
+    "D_opt_args": "D_opt sansyo",
+    "G_loss_args": "G_loss sansyo",
+    "D_loss_args": "D_loss sansyo",
+    "dataset_args": "dataset sansyo",
+    "sched_args": "sched sansyo",
+    "grid_args": "grid sansyo",
+    "metric_arg_list": "metrics sansyo",
+    "tf_config": "tf_config sansyo",
+    "submit_config": "submit_config sansyo",
+    "G_smoothing_kimg": 10.0,
+    "D_repeats": 1,
+    "minibatch_repeats": 4,
+    "reset_opt_for_new_lod": true,
+    "mirror_augment": false,
+    "drange_net": [-1,1],
+    "image_snapshot_ticks": 1,
+    "network_snapshot_ticks": 10,
+    "save_tf_graph": false,
+    "save_weight_histograms": false,
+    "resume_run_id": "None",
+    "resume_snapshot": "None",
+    "resume_kimg": 0.0,
+    "resume_time": 0.0
+  }
+}
