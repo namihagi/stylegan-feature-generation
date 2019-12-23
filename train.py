@@ -22,12 +22,14 @@ if 1:
     desc          = 'sgan'                                                                 # Description string included in result subdir name.
     train         = EasyDict(run_func_name='training.training_loop.training_loop')         # Options for training loop.
     G             = EasyDict(func_name='training.networks_stylegan.G_style')               # Options for generator network.
+    F             = EasyDict(func_name='training.networks_stylegan.FE_basic')              # Options for feature extractor network.
     D             = EasyDict(func_name='training.networks_stylegan.D_basic')               # Options for discriminator network.
     G_opt         = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                          # Options for generator optimizer.
     D_opt         = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                          # Options for discriminator optimizer.
     G_loss        = EasyDict(func_name='training.loss.G_logistic_nonsaturating')           # Options for generator loss.
     D_loss        = EasyDict(func_name='training.loss.D_logistic_simplegp', r1_gamma=10.0) # Options for discriminator loss.
     dataset       = EasyDict()                                                             # Options for load_dataset().
+    dataset_target= EasyDict()                                                             # Options for load_dataset().
     sched         = EasyDict()                                                             # Options for TrainingSchedule.
     grid          = EasyDict(size='4k', layout='random')                                   # Options for setup_snapshot_image_grid().
     metrics       = [metric_base.fid50k]                                                   # Options for MetricGroup.
@@ -45,13 +47,23 @@ if 1:
 
     # desc += '-ffhq-feature-base';      dataset = EasyDict(tfrecord_dir='base-feature', resolution=32);        train.mirror_augment = False
     # desc += '-ffhq-feature-normalized';      dataset = EasyDict(tfrecord_dir='normalized-feature', resolution=32);        train.mirror_augment = False
-    desc += '-ffhq-feature-log';      dataset = EasyDict(tfrecord_dir='log-feature', resolution=32);        train.mirror_augment = False
+    # desc += '-ffhq-feature-log';      dataset = EasyDict(tfrecord_dir='log-feature', resolution=32);        train.mirror_augment = False
+
+    # base image range. if use feature, need to change
+    # base          [0.0, 15.1]
+    # normalized    [-0.4, 28.3]
+    # log           [0.0, 2.8]
+    desc += '-ffhq-base-aeroplane';    dataset = EasyDict(tfrecord_dir='log-feature', resolution=32, dynamic_range=[0.0, 15.1])
+    dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=1024);    train.mirror_augment = False
 
     # Number of GPUs.
     #desc += '-1gpu'; submit_config.num_gpus = 1; sched.minibatch_base = 4; sched.minibatch_dict = {4: 128, 8: 128, 16: 128, 32: 64, 64: 32, 128: 16, 256: 8, 512: 4}
     #desc += '-2gpu'; submit_config.num_gpus = 2; sched.minibatch_base = 8; sched.minibatch_dict = {4: 256, 8: 256, 16: 128, 32: 64, 64: 32, 128: 16, 256: 8}
-    #desc += '-4gpu'; submit_config.num_gpus = 4; sched.minibatch_base = 16; sched.minibatch_dict = {4: 512, 8: 256, 16: 128, 32: 64, 64: 32, 128: 16}
-    desc += '-8gpu'; submit_config.num_gpus = 8; sched.minibatch_base = 32; sched.minibatch_dict = {4: 512, 8: 256, 16: 128, 32: 64, 64: 32}
+    # desc += '-4gpu'; submit_config.num_gpus = 4; sched.minibatch_base = 16; sched.minibatch_dict = {4: 512, 8: 256, 16: 128, 32: 64, 64: 32, 128: 16}
+    # desc += '-8gpu'; submit_config.num_gpus = 8; sched.minibatch_base = 32; sched.minibatch_dict = {4: 512, 8: 256, 16: 128, 32: 64, 64: 32}
+
+    desc += '-4gpu'; submit_config.num_gpus = 4; sched.minibatch_base = 16; sched.minibatch_dict = {4: 64, 8: 32, 16: 16, 32: 16, 64: 16, 128: 16}
+    # desc += '-8gpu'; submit_config.num_gpus = 8; sched.minibatch_base = 32; sched.minibatch_dict = {4: 512, 8: 256, 16: 128, 32: 64, 64: 32}
 
     # Default options.
     train.total_kimg = 25000
@@ -181,8 +193,8 @@ if 0:
 
 def main():
     kwargs = EasyDict(train)
-    kwargs.update(G_args=G, D_args=D, G_opt_args=G_opt, D_opt_args=D_opt, G_loss_args=G_loss, D_loss_args=D_loss)
-    kwargs.update(dataset_args=dataset, sched_args=sched, grid_args=grid, metric_arg_list=metrics, tf_config=tf_config)
+    kwargs.update(G_args=G, F_args=F, D_args=D, G_opt_args=G_opt, D_opt_args=D_opt, G_loss_args=G_loss, D_loss_args=D_loss)
+    kwargs.update(dataset_args=dataset, dataset_target_args=dataset_target, sched_args=sched, grid_args=grid, metric_arg_list=metrics, tf_config=tf_config)
     kwargs.submit_config = copy.deepcopy(submit_config)
     kwargs.submit_config.run_dir_root = dnnlib.submission.submit.get_template_from_path(config.result_dir)
     kwargs.submit_config.run_dir_ignore += config.run_dir_ignore
