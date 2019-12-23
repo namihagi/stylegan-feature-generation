@@ -1,6 +1,5 @@
 cache/*
 datasets/*
-dnnlib/*
 results/*
 __pycache__/*
 dnnlib/__pycache__/*
