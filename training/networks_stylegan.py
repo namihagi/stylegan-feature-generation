@@ -162,11 +162,18 @@ def dense(x, fmaps, **kwargs):
 #----------------------------------------------------------------------------
 # Convolutional layer.
 
-def conv2d(x, fmaps, kernel, **kwargs):
+def conv2d(x, fmaps, kernel, stride=1, **kwargs):
     assert kernel >= 1 and kernel % 2 == 1
     w = get_weight([kernel, kernel, x.shape[1].value, fmaps], **kwargs)
     w = tf.cast(w, x.dtype)
-    return tf.nn.conv2d(x, w, strides=[1,1,1,1], padding='SAME', data_format='NCHW')
+    return tf.nn.conv2d(x, w, strides=[1,1,stride,stride], padding='SAME', data_format='NCHW')
+
+#----------------------------------------------------------------------------
+# Convolutional layer.
+
+def max_pool2d(x, kernel, stride):
+    assert kernel >= 1 and kernel % 2 == 1
+    return tf.nn.max_pool(x, [1,1,kernel,kernel], strides=[1,1,stride,stride], padding='SAME', data_format='NCHW')
 
 #----------------------------------------------------------------------------
 # Fused convolution + scaling.
@@ -302,7 +309,7 @@ def minibatch_stddev_layer(x, group_size=4, num_new_features=1):
 
 def G_style(
     latents_in,                                     # First input: Latent vectors (Z) [minibatch, latent_size].
-    labels_in,                                      # Second input: Conditioning labels [minibatch, label_size].
+    # labels_in,                                      # Second input: Conditioning labels [minibatch, label_size].
     truncation_psi          = 0.7,                  # Style strength multiplier for the truncation trick. None = disable.
     truncation_cutoff       = 8,                    # Number of layers for which to apply the truncation trick. None = disable.
     truncation_psi_val      = None,                 # Value for truncation_psi to use during validation.
@@ -337,19 +344,14 @@ def G_style(
     dlatent_size = components.synthesis.input_shape[2]
 
     if 'mapping' not in components:
-        components.mapping = tflib.Network('G_mapping', func_name=G_mapping, dlatent_broadcast=num_layers, **kwargs)
+        components.mapping = tflib.Network('FE_basic', func_name=FE_basic, dlatent_broadcast=num_layers, label_size=512)
 
     # Setup variables.
     lod_in = tf.get_variable('lod', initializer=np.float32(0), trainable=False)
     dlatent_avg = tf.get_variable('dlatent_avg', shape=[dlatent_size], initializer=tf.initializers.zeros(), trainable=False)
 
-    # ----- feature extractor -----
-    resnet50 = tf.keras.applications.resnet50.ResNet50(weights='imagenet', include_top=False)
-    latents_in = resnet50(latents_in)
-    # -----------------------------
-
     # Evaluate mapping network.
-    dlatents = components.mapping.get_output_for(latents_in, labels_in, **kwargs)
+    dlatents = components.mapping.get_output_for(latents_in, label_size=512)
 
     # Update moving average of W.
     if dlatent_avg_beta is not None:
@@ -359,18 +361,18 @@ def G_style(
             with tf.control_dependencies([update_op]):
                 dlatents = tf.identity(dlatents)
 
-    # Perform style mixing regularization.
-    if style_mixing_prob is not None:
-        with tf.name_scope('StyleMix'):
-            latents2 = tf.random_normal(tf.shape(latents_in))
-            dlatents2 = components.mapping.get_output_for(latents2, labels_in, **kwargs)
-            layer_idx = np.arange(num_layers)[np.newaxis, :, np.newaxis]
-            cur_layers = num_layers - tf.cast(lod_in, tf.int32) * 2
-            mixing_cutoff = tf.cond(
-                tf.random_uniform([], 0.0, 1.0) < style_mixing_prob,
-                lambda: tf.random_uniform([], 1, cur_layers, dtype=tf.int32),
-                lambda: cur_layers)
-            dlatents = tf.where(tf.broadcast_to(layer_idx < mixing_cutoff, tf.shape(dlatents)), dlatents, dlatents2)
+    # # Perform style mixing regularization.
+    # if style_mixing_prob is not None:
+    #     with tf.name_scope('StyleMix'):
+    #         latents2 = tf.random_normal(tf.shape(latents_in))
+    #         dlatents2 = components.mapping.get_output_for(latents2, labels_in, **kwargs)
+    #         layer_idx = np.arange(num_layers)[np.newaxis, :, np.newaxis]
+    #         cur_layers = num_layers - tf.cast(lod_in, tf.int32) * 2
+    #         mixing_cutoff = tf.cond(
+    #             tf.random_uniform([], 0.0, 1.0) < style_mixing_prob,
+    #             lambda: tf.random_uniform([], 1, cur_layers, dtype=tf.int32),
+    #             lambda: cur_layers)
+    #         dlatents = tf.where(tf.broadcast_to(layer_idx < mixing_cutoff, tf.shape(dlatents)), dlatents, dlatents2)
 
     # Apply truncation trick.
     if truncation_psi is not None and truncation_cutoff is not None:
@@ -437,6 +439,70 @@ def G_mapping(
     if dlatent_broadcast is not None:
         with tf.variable_scope('Broadcast'):
             x = tf.tile(x[:, np.newaxis], [1, dlatent_broadcast, 1])
+
+    # Output.
+    assert x.dtype == tf.as_dtype(dtype)
+    return tf.identity(x, name='dlatents_out')
+
+#----------------------------------------------------------------------------
+# Feature Extractor to generate z
+
+def FE_basic(
+    images_in,                          # First input: Images [minibatch, channel, height, width].
+    num_channels        = 3,            # Number of input color channels. Overridden based on dataset.
+    resolution          = 1024,         # Input resolution. Overridden based on dataset.
+    label_size          = 512,          # Dimensionality of the labels, 0 if no labels. Overridden based on dataset.
+    fmap_base           = 8192,         # Overall multiplier for the number of feature maps.
+    fmap_decay          = 1.0,          # log2 feature map reduction when doubling the resolution.
+    fmap_max            = 512,          # Maximum number of feature maps in any layer.
+    mapping_lrmul       = 0.01,         # Learning rate multiplier for the mapping layers.
+    dlatent_broadcast   = None,         # Output disentangled latent (W) as [minibatch, dlatent_size] or [minibatch, dlatent_broadcast, dlatent_size].
+    nonlinearity        = 'lrelu',      # Activation function: 'relu', 'lrelu',
+    use_wscale          = True,         # Enable equalized learning rate?
+    mbstd_group_size    = 4,            # Group size for the minibatch standard deviation layer, 0 = disable.
+    mbstd_num_features  = 1,            # Number of features for the minibatch standard deviation layer.
+    dtype               = 'float32',    # Data type to use for activations and outputs.
+    fused_scale         = 'auto',       # True = fused convolution + scaling, False = separate ops, 'auto' = decide automatically.
+    blur_filter         = [1,2,1],      # Low-pass filter to apply when resampling activations. None = no filtering.
+    **_kwargs):                         # Ignore unrecognized keyword args.
+
+    resolution_log2 = int(np.log2(resolution))
+    assert resolution == 2**resolution_log2 and resolution >= 4
+
+    act, gain = {'relu': (tf.nn.relu, np.sqrt(2)), 'lrelu': (leaky_relu, np.sqrt(2))}[nonlinearity]
+
+    images_in.set_shape([None, num_channels, resolution, resolution])
+    images_in = tf.cast(images_in, dtype)
+
+    with tf.variable_scope('Conv%d' % 1):
+        x = tf.nn.crelu(apply_bias(conv2d(images_in, fmaps=24, kernel=7, stride=4, gain=gain, use_wscale=use_wscale)))
+
+    with tf.variable_scope('MaxPool%d' % 1):
+        x = max_pool2d(x, kernel=3, stride=2)
+
+    with tf.variable_scope('Conv%d' % 2):
+        x = tf.nn.crelu(apply_bias(conv2d(x, fmaps=64, kernel=5, stride=2, gain=gain, use_wscale=use_wscale)))
+
+    with tf.variable_scope('MaxPool%d' % 2):
+        x = max_pool2d(x, kernel=3, stride=2)
+
+    with tf.variable_scope('Conv%d' % 3):
+        x = act(apply_bias(conv2d(x, fmaps=64, kernel=5, stride=2, gain=gain, use_wscale=use_wscale)))
+
+    with tf.variable_scope('Conv%d' % 4):
+        x = act(apply_bias(conv2d(x, fmaps=512, kernel=1, gain=gain, use_wscale=use_wscale)))
+
+    with tf.variable_scope('GAPool%d' % 1):
+        x = tf.reduce_mean(x, axis=[2,3])
+
+    with tf.variable_scope('Dense%d' % 1):
+        x = dense(x, fmaps=512, gain=gain, use_wscale=use_wscale, lrmul=mapping_lrmul)
+        x = apply_bias(x, lrmul=mapping_lrmul)
+        x = act(x)
+
+    # Broadcast.
+    with tf.variable_scope('Broadcast'):
+        x = tf.tile(x[:, np.newaxis], [1, dlatent_broadcast, 1])
 
     # Output.
     assert x.dtype == tf.as_dtype(dtype)
@@ -667,64 +733,4 @@ def D_basic(
     return scores_out
 
 #----------------------------------------------------------------------------
-# Feature Extractor to generate z
 
-def FE_basic(
-    images_in,                          # First input: Images [minibatch, channel, height, width].
-    num_channels        = 3,            # Number of input color channels. Overridden based on dataset.
-    resolution          = 1024,           # Input resolution. Overridden based on dataset.
-    label_size          = 512,            # Dimensionality of the labels, 0 if no labels. Overridden based on dataset.
-    fmap_base           = 8192,         # Overall multiplier for the number of feature maps.
-    fmap_decay          = 1.0,          # log2 feature map reduction when doubling the resolution.
-    fmap_max            = 512,          # Maximum number of feature maps in any layer.
-    nonlinearity        = 'lrelu',      # Activation function: 'relu', 'lrelu',
-    use_wscale          = True,         # Enable equalized learning rate?
-    mbstd_group_size    = 4,            # Group size for the minibatch standard deviation layer, 0 = disable.
-    mbstd_num_features  = 1,            # Number of features for the minibatch standard deviation layer.
-    dtype               = 'float32',    # Data type to use for activations and outputs.
-    fused_scale         = 'auto',       # True = fused convolution + scaling, False = separate ops, 'auto' = decide automatically.
-    blur_filter         = [1,2,1],      # Low-pass filter to apply when resampling activations. None = no filtering.
-    **_kwargs):                         # Ignore unrecognized keyword args.
-
-    resolution_log2 = int(np.log2(resolution))
-    assert resolution == 2**resolution_log2 and resolution >= 4
-    def nf(stage): return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
-    def blur(x): return blur2d(x, blur_filter) if blur_filter else x
-    act, gain = {'relu': (tf.nn.relu, np.sqrt(2)), 'lrelu': (leaky_relu, np.sqrt(2))}[nonlinearity]
-
-    images_in.set_shape([None, num_channels, resolution, resolution])
-    images_in = tf.cast(images_in, dtype)
-
-    # Building blocks.
-    def fromrgb(x, res): # res = 2..resolution_log2
-        with tf.variable_scope('FromRGB_lod%d' % (resolution_log2 - res)):
-            return act(apply_bias(conv2d(x, fmaps=nf(res-1), kernel=1, gain=gain, use_wscale=use_wscale)))
-    def block(x, res): # res = 2..resolution_log2
-        with tf.variable_scope('%dx%d' % (2**res, 2**res)):
-            if res >= 3: # 8x8 and up
-                with tf.variable_scope('Conv0'):
-                    x = act(apply_bias(conv2d(x, fmaps=nf(res-1), kernel=3, gain=gain, use_wscale=use_wscale)))
-                with tf.variable_scope('Conv1_down'):
-                    x = act(apply_bias(conv2d_downscale2d(blur(x), fmaps=nf(res-2), kernel=3, gain=gain, use_wscale=use_wscale, fused_scale=fused_scale)))
-            else: # 4x4
-                if mbstd_group_size > 1:
-                    x = minibatch_stddev_layer(x, mbstd_group_size, mbstd_num_features)
-                with tf.variable_scope('Conv'):
-                    x = act(apply_bias(conv2d(x, fmaps=nf(res-1), kernel=3, gain=gain, use_wscale=use_wscale)))
-                with tf.variable_scope('Dense0'):
-                    x = act(apply_bias(dense(x, fmaps=nf(res-2), gain=gain, use_wscale=use_wscale)))
-                with tf.variable_scope('Dense1'):
-                    x = apply_bias(dense(x, fmaps=max(label_size, 1), gain=1, use_wscale=use_wscale))
-            return x
-
-    # Fixed structure: simple and efficient, but does not support progressive growing.
-    x = fromrgb(images_in, resolution_log2)
-    for res in range(resolution_log2, 2, -1):
-        x = block(x, res)
-    fe_out = block(x, 2)
-
-    assert fe_out.dtype == tf.as_dtype(dtype)
-    fe_out = tf.identity(fe_out, name='fe_out')
-    return fe_out
-
-#----------------------------------------------------------------------------

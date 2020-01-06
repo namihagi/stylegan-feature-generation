@@ -155,11 +155,11 @@ def training_loop(
         if resume_run_id is not None:
             network_pkl = misc.locate_network_pkl(resume_run_id, resume_snapshot)
             print('Loading networks from "%s"...' % network_pkl)
-            G, F, D, Gs = misc.load_pkl(network_pkl)
+            G, D, Gs = misc.load_pkl(network_pkl)
         else:
             print('Constructing networks...')
             G = tflib.Network('G', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
-            F = tflib.Network('F', num_channels=3, resolution=1024, label_size=512, **F_args)
+            # F = tflib.Network('F', num_channels=3, resolution=1024, label_size=512, **F_args)
             D = tflib.Network('D', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
             Gs = G.clone('Gs')
     G.print_layers(); D.print_layers()
@@ -178,7 +178,6 @@ def training_loop(
     for gpu in range(submit_config.num_gpus):
         with tf.name_scope('GPU%d' % gpu), tf.device('/gpu:%d' % gpu):
             G_gpu = G if gpu == 0 else G.clone(G.name + '_shadow')
-            F_gpu = F if gpu == 0 else F.clone(F.name + '_shadow')
             D_gpu = D if gpu == 0 else D.clone(D.name + '_shadow')
             lod_assign_ops = [tf.assign(G_gpu.find_var('lod'), lod_in), tf.assign(D_gpu.find_var('lod'), lod_in)]
             reals, labels = training_set.get_minibatch_tf()
@@ -188,19 +187,12 @@ def training_loop(
             reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_set.dynamic_range, drange_net)
             # ---------------
             with tf.name_scope('G_loss'), tf.control_dependencies(lod_assign_ops):
-                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, F=F_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_split,
+                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_split,
                                                        reals_target=reals_target, **G_loss_args)
             with tf.name_scope('D_loss'), tf.control_dependencies(lod_assign_ops):
-                D_loss = dnnlib.util.call_func_by_name(G=G_gpu, F=F_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_split,
+                D_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_split,
                                                        reals=reals, labels=labels, reals_target=reals_target, **D_loss_args)
-            # ----- add -----
-            G_trainables = OrderedDict()
-            for k, v in list(G_gpu.trainables.items()):
-                G_trainables.update(k=v)
-            for k, v in list(F_gpu.trainables.items()):
-                G_trainables.update(k=v)
-            # ---------------
-            G_opt.register_gradients(tf.reduce_mean(G_loss), G_trainables)
+            G_opt.register_gradients(tf.reduce_mean(G_loss), G_gpu.trainables)
             D_opt.register_gradients(tf.reduce_mean(D_loss), D_gpu.trainables)
     G_train_op = G_opt.apply_updates()
     D_train_op = D_opt.apply_updates()
@@ -224,7 +216,7 @@ def training_loop(
     if save_tf_graph:
         summary_log.add_graph(tf.get_default_graph())
     if save_weight_histograms:
-        G.setup_weight_histograms(); F.setup_weight_histograms(); D.setup_weight_histograms()
+        G.setup_weight_histograms(); D.setup_weight_histograms()
     metrics = metric_base.MetricGroup(metric_arg_list)
 
     print('Training...\n')
@@ -284,7 +276,7 @@ def training_loop(
             #     misc.save_image_grid(grid_fakes, os.path.join(submit_config.run_dir, 'fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
             if cur_tick % network_snapshot_ticks == 0 or done or cur_tick == 1:
                 pkl = os.path.join(submit_config.run_dir, 'network-snapshot-%06d.pkl' % (cur_nimg // 1000))
-                misc.save_pkl((G, F, D, Gs), pkl)
+                misc.save_pkl((G, D, Gs), pkl)
                 # metrics.run(pkl, run_dir=submit_config.run_dir, num_gpus=submit_config.num_gpus, tf_config=tf_config)
 
             # Update summaries and RunContext.
@@ -294,7 +286,7 @@ def training_loop(
             maintenance_time = ctx.get_last_update_interval() - tick_time
 
     # Write final results.
-    misc.save_pkl((G, F, D, Gs), os.path.join(submit_config.run_dir, 'network-final.pkl'))
+    misc.save_pkl((G, D, Gs), os.path.join(submit_config.run_dir, 'network-final.pkl'))
     summary_log.close()
 
     ctx.close()
