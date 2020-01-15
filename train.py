@@ -49,12 +49,19 @@ if 1:
     # desc += '-ffhq-feature-normalized';      dataset = EasyDict(tfrecord_dir='normalized-feature', resolution=32);        train.mirror_augment = False
     # desc += '-ffhq-feature-log';      dataset = EasyDict(tfrecord_dir='log-feature', resolution=32);        train.mirror_augment = False
 
-    # base image range. if use feature, need to change
-    # base          [0.0, 15.1]
-    # normalized    [-0.4, 28.3]
-    # log           [0.0, 2.8]
-    desc += '-ffhq-base-aeroplane';    dataset = EasyDict(tfrecord_dir='log-feature', resolution=32, dynamic_range=[0.0, 15.1], num_threads=16)
-    dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=1024, num_threads=16);    train.mirror_augment = False
+    # # ffhq feature
+    # # base image range. if use feature, need to change
+    # # base          [0.0, 15.1]
+    # # normalized    [-0.4, 28.3]
+    # # log           [0.0, 2.8]
+    # desc += '-ffhq-base-aeroplane';    dataset = EasyDict(tfrecord_dir='base-feature', resolution=32, dynamic_range=[0.0, 15.1], num_threads=16)
+    # dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=1024, num_threads=16);    train.mirror_augment = False
+
+    # wider-face feature
+    # max: 14.69332
+    # min: 0.000000
+    desc += '-ffhq-wider-aeroplane512';    dataset = EasyDict(tfrecord_dir='wider-face', resolution=32, dynamic_range=[0.0, 14.8], num_threads=16)
+    dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=512, num_threads=16);    train.mirror_augment = False
 
     # Number of GPUs.
     #desc += '-1gpu'; submit_config.num_gpus = 1; sched.minibatch_base = 4; sched.minibatch_dict = {4: 128, 8: 128, 16: 128, 32: 64, 64: 32, 128: 16, 256: 8, 512: 4}

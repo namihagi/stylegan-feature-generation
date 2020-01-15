@@ -218,7 +218,7 @@ def conv2d_downscale2d(x, fmaps, kernel, fused_scale='auto', **kwargs):
 #----------------------------------------------------------------------------
 # Apply bias to the given activation tensor.
 
-def apply_bias(x, lrmul=1):
+def apply_bias(x, lrmul=1.0):
     b = tf.get_variable('bias', shape=[x.shape[1]], initializer=tf.initializers.zeros()) * lrmul
     b = tf.cast(b, x.dtype)
     if len(x.shape) == 2:
@@ -344,7 +344,7 @@ def G_style(
     dlatent_size = components.synthesis.input_shape[2]
 
     if 'mapping' not in components:
-        components.mapping = tflib.Network('FE_basic', func_name=FE_basic, dlatent_broadcast=num_layers, label_size=512)
+        components.mapping = tflib.Network('FE_basic', func_name=FE_basic, dlatent_broadcast=num_layers, resolution=512, label_size=512)
 
     # Setup variables.
     lod_in = tf.get_variable('lod', initializer=np.float32(0), trainable=False)
