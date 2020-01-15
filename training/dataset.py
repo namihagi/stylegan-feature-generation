@@ -39,6 +39,7 @@ class TFRecordDataset:
         tfrecord_dir,               # Directory containing a collection of tfrecords files.
         resolution      = None,     # Dataset resolution, None = autodetect.
         label_file      = None,     # Relative path of the labels file, None = autodetect.
+        dynamic_range   = [0, 255],
         max_label_size  = 0,        # 0 = no labels, 'full' = full labels, <int> = N first label components.
         repeat          = True,     # Repeat dataset indefinitely.
         shuffle_mb      = 4096,     # Shuffle data within specified window (megabytes), 0 = disable shuffling.
@@ -51,11 +52,7 @@ class TFRecordDataset:
         self.resolution_log2    = None
         self.shape              = []        # [channel, height, width]
         self.dtype              = 'float32'
-        self.dynamic_range      = [0.0, 2.8]
-        # base image range. if use feature, need to change
-        # base          [0.0, 15.1]
-        # normalized    [-0.4, 28.3]
-        # log           [0.0, 2.8]
+        self.dynamic_range      = dynamic_range
         self.label_file         = label_file
         self.label_size         = None      # [component]
         self.label_dtype        = None

@@ -8,6 +8,8 @@
 """Main training script."""
 
 import os
+from collections import OrderedDict
+
 import numpy as np
 import tensorflow as tf
 import dnnlib
@@ -112,12 +114,14 @@ def training_schedule(
 def training_loop(
     submit_config,
     G_args                  = {},       # Options for generator network.
+    F_args                  = {},       # Options for feature extractor network.
     D_args                  = {},       # Options for discriminator network.
     G_opt_args              = {},       # Options for generator optimizer.
     D_opt_args              = {},       # Options for discriminator optimizer.
     G_loss_args             = {},       # Options for generator loss.
     D_loss_args             = {},       # Options for discriminator loss.
     dataset_args            = {},       # Options for dataset.load_dataset().
+    dataset_target_args     = {},       # Options for dataset.load_dataset().
     sched_args              = {},       # Options for train.TrainingSchedule.
     grid_args               = {},       # Options for train.setup_snapshot_image_grid().
     metric_arg_list         = [],       # Options for MetricGroup.
@@ -144,6 +148,7 @@ def training_loop(
 
     # Load training set.
     training_set = dataset.load_dataset(data_dir=config.data_dir, verbose=True, **dataset_args)
+    training_target_set = dataset.load_dataset(data_dir=config.data_dir, verbose=True, **dataset_target_args)
 
     # Construct networks.
     with tf.device('/gpu:0'):
@@ -154,6 +159,7 @@ def training_loop(
         else:
             print('Constructing networks...')
             G = tflib.Network('G', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
+            # F = tflib.Network('F', num_channels=3, resolution=1024, label_size=512, **F_args)
             D = tflib.Network('D', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
             Gs = G.clone('Gs')
     G.print_layers(); D.print_layers()
@@ -161,6 +167,7 @@ def training_loop(
     print('Building TensorFlow graph...')
     with tf.name_scope('Inputs'), tf.device('/cpu:0'):
         lod_in          = tf.placeholder(tf.float32, name='lod_in', shape=[])
+        lod_fe_in       = tf.constant(0.0, dtype=tf.float32)
         lrate_in        = tf.placeholder(tf.float32, name='lrate_in', shape=[])
         minibatch_in    = tf.placeholder(tf.int32, name='minibatch_in', shape=[])
         minibatch_split = minibatch_in // submit_config.num_gpus
@@ -175,10 +182,16 @@ def training_loop(
             lod_assign_ops = [tf.assign(G_gpu.find_var('lod'), lod_in), tf.assign(D_gpu.find_var('lod'), lod_in)]
             reals, labels = training_set.get_minibatch_tf()
             reals = process_reals(reals, lod_in, mirror_augment, training_set.dynamic_range, drange_net)
+            # ----- add -----
+            reals_target, labels_target = training_target_set.get_minibatch_tf()
+            reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_set.dynamic_range, drange_net)
+            # ---------------
             with tf.name_scope('G_loss'), tf.control_dependencies(lod_assign_ops):
-                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_split, **G_loss_args)
+                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_split,
+                                                       reals_target=reals_target, **G_loss_args)
             with tf.name_scope('D_loss'), tf.control_dependencies(lod_assign_ops):
-                D_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_split, reals=reals, labels=labels, **D_loss_args)
+                D_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_split,
+                                                       reals=reals, labels=labels, reals_target=reals_target, **D_loss_args)
             G_opt.register_gradients(tf.reduce_mean(G_loss), G_gpu.trainables)
             D_opt.register_gradients(tf.reduce_mean(D_loss), D_gpu.trainables)
     G_train_op = G_opt.apply_updates()
@@ -192,8 +205,8 @@ def training_loop(
             peak_gpu_mem_op = tf.constant(0)
 
     print('Setting up snapshot image grid...')
-    grid_size, grid_reals, grid_labels, grid_latents = misc.setup_snapshot_image_grid(G, training_set, **grid_args)
-    sched = training_schedule(cur_nimg=total_kimg*1000, training_set=training_set, num_gpus=submit_config.num_gpus, **sched_args)
+    # grid_size, grid_reals, grid_labels, grid_latents = misc.setup_snapshot_image_grid(G, training_set, **grid_args)
+    # sched = training_schedule(cur_nimg=total_kimg*1000, training_set=training_set, num_gpus=submit_config.num_gpus, **sched_args)
     # grid_fakes = Gs.run(grid_latents, grid_labels, is_validation=True, minibatch_size=sched.minibatch//submit_config.num_gpus)
 
     print('Setting up run dir...')
@@ -220,6 +233,7 @@ def training_loop(
         # Choose training parameters and configure training ops.
         sched = training_schedule(cur_nimg=cur_nimg, training_set=training_set, num_gpus=submit_config.num_gpus, **sched_args)
         training_set.configure(sched.minibatch // submit_config.num_gpus, sched.lod)
+        training_target_set.configure(sched.minibatch // submit_config.num_gpus, 0.0)
         if reset_opt_for_new_lod:
             if np.floor(sched.lod) != np.floor(prev_lod) or np.ceil(sched.lod) != np.ceil(prev_lod):
                 G_opt.reset_optimizer_state(); D_opt.reset_optimizer_state()

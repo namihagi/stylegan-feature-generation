@@ -146,8 +146,6 @@ def create_session(config_dict: dict = None, force_as_default: bool = False) -> 
         session._default_session.enforce_nesting = False
         session._default_session.__enter__() # pylint: disable=no-member
 
-    from tensorflow.python.keras import backend
-    backend.set_session(session)
     return session
 
 
