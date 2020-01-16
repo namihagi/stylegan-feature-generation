@@ -128,7 +128,7 @@ def G_logistic_saturating(G, D, opt, training_set, minibatch_size): # pylint: di
     loss = -tf.nn.softplus(fake_scores_out)  # log(1 - logistic(fake_scores_out))
     return loss
 
-def G_logistic_nonsaturating(G, D, opt, training_set, minibatch_size, reals_target): # pylint: disable=unused-argument
+def G_logistic_nonsaturating(G, D, Detector_use, opt, training_set, minibatch_size, reals_target): # pylint: disable=unused-argument
     # latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     labels = training_set.get_random_labels_tf(minibatch_size)
     fake_images_out = G.get_output_for(reals_target, is_training=True)

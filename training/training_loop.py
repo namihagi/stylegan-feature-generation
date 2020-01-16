@@ -8,6 +8,7 @@
 """Main training script."""
 
 import os
+import copy
 from collections import OrderedDict
 
 import numpy as np
@@ -21,9 +22,11 @@ import train
 from training import dataset
 from training import misc
 from metrics import metric_base
+from training.network_face_detector import FaceDetector, load
 
 #----------------------------------------------------------------------------
 # Just-in-time processing of training images before feeding them to the networks.
+
 
 def process_reals(x, lod, mirror_augment, drange_data, drange_net):
     with tf.name_scope('ProcessReals'):
@@ -114,7 +117,7 @@ def training_schedule(
 def training_loop(
     submit_config,
     G_args                  = {},       # Options for generator network.
-    F_args                  = {},       # Options for feature extractor network.
+    FD_args                 = {'ckpt_dir': None},   # Options for feature extractor network.
     D_args                  = {},       # Options for discriminator network.
     G_opt_args              = {},       # Options for generator optimizer.
     D_opt_args              = {},       # Options for discriminator optimizer.
@@ -159,10 +162,23 @@ def training_loop(
         else:
             print('Constructing networks...')
             G = tflib.Network('G', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
-            # F = tflib.Network('F', num_channels=3, resolution=1024, label_size=512, **F_args)
             D = tflib.Network('D', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
+            # 学習済みのパラメーターの読み込み
+            # Detector = model()
             Gs = G.clone('Gs')
     G.print_layers(); D.print_layers()
+
+    # restore weights for face detector
+    with tf.Graph.as_default(), tf.device('/gpu:0'):
+        input_images = tf.placeholder(tf.float32)
+        input_features = tf.placeholder(tf.float32)
+        Detector = FaceDetector(input_images, input_features)
+        saver2 = tf.train.Saver()
+        init_op = tf.global_variables_initializer()
+        with tf.Session as sess2:
+            sess2.run(init_op)
+            assert FD_args.ckpt_dir is not None
+            load(sess2, saver2, FD_args.ckpt_dir)
 
     print('Building TensorFlow graph...')
     with tf.name_scope('Inputs'), tf.device('/cpu:0'):
@@ -180,15 +196,21 @@ def training_loop(
             G_gpu = G if gpu == 0 else G.clone(G.name + '_shadow')
             D_gpu = D if gpu == 0 else D.clone(D.name + '_shadow')
             lod_assign_ops = [tf.assign(G_gpu.find_var('lod'), lod_in), tf.assign(D_gpu.find_var('lod'), lod_in)]
+
+            Detector_gpu = Detector if gpu == 0 else copy.deepcopy(Detector)
+
+            # face features
             reals, labels = training_set.get_minibatch_tf()
             reals = process_reals(reals, lod_in, mirror_augment, training_set.dynamic_range, drange_net)
-            # ----- add -----
+
+            # target images (VOC)
             reals_target, labels_target = training_target_set.get_minibatch_tf()
             reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_set.dynamic_range, drange_net)
-            # ---------------
+
             with tf.name_scope('G_loss'), tf.control_dependencies(lod_assign_ops):
-                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_split,
-                                                       reals_target=reals_target, **G_loss_args)
+                reuse = (gpu > 0)
+                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, Detector_use=reuse, opt=G_opt, training_set=training_set,
+                                                       minibatch_size=minibatch_split, reals_target=reals_target, **G_loss_args)
             with tf.name_scope('D_loss'), tf.control_dependencies(lod_assign_ops):
                 D_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_split,
                                                        reals=reals, labels=labels, reals_target=reals_target, **D_loss_args)
