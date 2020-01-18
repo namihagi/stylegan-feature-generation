@@ -309,7 +309,7 @@ def minibatch_stddev_layer(x, group_size=4, num_new_features=1):
 
 def G_style(
     latents_in,                                     # First input: Latent vectors (Z) [minibatch, latent_size].
-    # labels_in,                                      # Second input: Conditioning labels [minibatch, label_size].
+    labels_in,                                      # Second input: Conditioning labels [minibatch, label_size].
     truncation_psi          = 0.7,                  # Style strength multiplier for the truncation trick. None = disable.
     truncation_cutoff       = 8,                    # Number of layers for which to apply the truncation trick. None = disable.
     truncation_psi_val      = None,                 # Value for truncation_psi to use during validation.
@@ -342,16 +342,15 @@ def G_style(
         components.synthesis = tflib.Network('G_synthesis', func_name=G_synthesis, **kwargs)
     num_layers = components.synthesis.input_shape[1]
     dlatent_size = components.synthesis.input_shape[2]
-
     if 'mapping' not in components:
-        components.mapping = tflib.Network('FE_basic', func_name=FE_basic, dlatent_broadcast=num_layers, resolution=512, label_size=512)
+        components.mapping = tflib.Network('G_mapping', func_name=G_mapping, dlatent_broadcast=num_layers, **kwargs)
 
     # Setup variables.
     lod_in = tf.get_variable('lod', initializer=np.float32(0), trainable=False)
     dlatent_avg = tf.get_variable('dlatent_avg', shape=[dlatent_size], initializer=tf.initializers.zeros(), trainable=False)
 
     # Evaluate mapping network.
-    dlatents = components.mapping.get_output_for(latents_in, label_size=512)
+    dlatents = components.mapping.get_output_for(latents_in, labels_in, **kwargs)
 
     # Update moving average of W.
     if dlatent_avg_beta is not None:
@@ -361,19 +360,6 @@ def G_style(
             with tf.control_dependencies([update_op]):
                 dlatents = tf.identity(dlatents)
 
-    # # Perform style mixing regularization.
-    # if style_mixing_prob is not None:
-    #     with tf.name_scope('StyleMix'):
-    #         latents2 = tf.random_normal(tf.shape(latents_in))
-    #         dlatents2 = components.mapping.get_output_for(latents2, labels_in, **kwargs)
-    #         layer_idx = np.arange(num_layers)[np.newaxis, :, np.newaxis]
-    #         cur_layers = num_layers - tf.cast(lod_in, tf.int32) * 2
-    #         mixing_cutoff = tf.cond(
-    #             tf.random_uniform([], 0.0, 1.0) < style_mixing_prob,
-    #             lambda: tf.random_uniform([], 1, cur_layers, dtype=tf.int32),
-    #             lambda: cur_layers)
-    #         dlatents = tf.where(tf.broadcast_to(layer_idx < mixing_cutoff, tf.shape(dlatents)), dlatents, dlatents2)
-
     # Apply truncation trick.
     if truncation_psi is not None and truncation_cutoff is not None:
         with tf.variable_scope('Truncation'):
@@ -381,7 +367,6 @@ def G_style(
             ones = np.ones(layer_idx.shape, dtype=np.float32)
             coefs = tf.where(layer_idx < truncation_cutoff, truncation_psi * ones, ones)
             dlatents = tflib.lerp(dlatent_avg, dlatents, coefs)
-
 
     # Evaluate synthesis network.
     with tf.control_dependencies([tf.assign(components.synthesis.find_var('lod'), lod_in)]):
@@ -451,19 +436,11 @@ def FE_basic(
     images_in,                          # First input: Images [minibatch, channel, height, width].
     num_channels        = 3,            # Number of input color channels. Overridden based on dataset.
     resolution          = 1024,         # Input resolution. Overridden based on dataset.
-    label_size          = 512,          # Dimensionality of the labels, 0 if no labels. Overridden based on dataset.
-    fmap_base           = 8192,         # Overall multiplier for the number of feature maps.
-    fmap_decay          = 1.0,          # log2 feature map reduction when doubling the resolution.
-    fmap_max            = 512,          # Maximum number of feature maps in any layer.
     mapping_lrmul       = 0.01,         # Learning rate multiplier for the mapping layers.
     dlatent_broadcast   = None,         # Output disentangled latent (W) as [minibatch, dlatent_size] or [minibatch, dlatent_broadcast, dlatent_size].
     nonlinearity        = 'lrelu',      # Activation function: 'relu', 'lrelu',
     use_wscale          = True,         # Enable equalized learning rate?
-    mbstd_group_size    = 4,            # Group size for the minibatch standard deviation layer, 0 = disable.
-    mbstd_num_features  = 1,            # Number of features for the minibatch standard deviation layer.
     dtype               = 'float32',    # Data type to use for activations and outputs.
-    fused_scale         = 'auto',       # True = fused convolution + scaling, False = separate ops, 'auto' = decide automatically.
-    blur_filter         = [1,2,1],      # Low-pass filter to apply when resampling activations. None = no filtering.
     **_kwargs):                         # Ignore unrecognized keyword args.
 
     resolution_log2 = int(np.log2(resolution))
@@ -500,13 +477,9 @@ def FE_basic(
         x = apply_bias(x, lrmul=mapping_lrmul)
         x = act(x)
 
-    # Broadcast.
-    with tf.variable_scope('Broadcast'):
-        x = tf.tile(x[:, np.newaxis], [1, dlatent_broadcast, 1])
-
     # Output.
     assert x.dtype == tf.as_dtype(dtype)
-    return tf.identity(x, name='dlatents_out')
+    return tf.identity(x, name='FE_out')
 
 #----------------------------------------------------------------------------
 # Synthesis network used in the StyleGAN paper.
