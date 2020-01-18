@@ -15,6 +15,7 @@ import numpy as np
 import tensorflow as tf
 import dnnlib
 import dnnlib.tflib as tflib
+from dnnlib.tflib import tfutil
 from dnnlib.tflib.autosummary import autosummary
 
 import config
@@ -169,16 +170,13 @@ def training_loop(
     G.print_layers(); D.print_layers()
 
     # restore weights for face detector
-    with tf.Graph.as_default(), tf.device('/gpu:0'):
+    with tf.device('/gpu:0'):
         input_images = tf.placeholder(tf.float32)
         input_features = tf.placeholder(tf.float32)
-        Detector = FaceDetector(input_images, input_features)
-        saver2 = tf.train.Saver()
-        init_op = tf.global_variables_initializer()
-        with tf.Session as sess2:
-            sess2.run(init_op)
-            assert FD_args.ckpt_dir is not None
-            load(sess2, saver2, FD_args.ckpt_dir)
+        Detector, detector_lod = FaceDetector(input_images, input_features)
+        saver2 = tf.train.Saver([var for var in tf.global_variables(scope='student') if not 'lod' in var.name])
+        load(tf.get_default_session(), saver2, './face_detector_ckpt')
+        tfutil.run(detector_lod.initializer)
 
     print('Building TensorFlow graph...')
     with tf.name_scope('Inputs'), tf.device('/cpu:0'):
@@ -195,9 +193,8 @@ def training_loop(
         with tf.name_scope('GPU%d' % gpu), tf.device('/gpu:%d' % gpu):
             G_gpu = G if gpu == 0 else G.clone(G.name + '_shadow')
             D_gpu = D if gpu == 0 else D.clone(D.name + '_shadow')
-            lod_assign_ops = [tf.assign(G_gpu.find_var('lod'), lod_in), tf.assign(D_gpu.find_var('lod'), lod_in)]
-
-            Detector_gpu = Detector if gpu == 0 else copy.deepcopy(Detector)
+            lod_assign_ops = [tf.assign(G_gpu.find_var('lod'), lod_in), tf.assign(D_gpu.find_var('lod'), lod_in),
+                              tf.assign(detector_lod, lod_in)]
 
             # face features
             reals, labels = training_set.get_minibatch_tf()
@@ -208,9 +205,8 @@ def training_loop(
             reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_set.dynamic_range, drange_net)
 
             with tf.name_scope('G_loss'), tf.control_dependencies(lod_assign_ops):
-                reuse = (gpu > 0)
-                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, Detector_use=reuse, opt=G_opt, training_set=training_set,
-                                                       minibatch_size=minibatch_split, reals_target=reals_target, **G_loss_args)
+                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_split,
+                                                       Detector_reuse=True, Detector_lod=detector_lod, reals_target=reals_target, labels_target=labels_target, **G_loss_args)
             with tf.name_scope('D_loss'), tf.control_dependencies(lod_assign_ops):
                 D_loss = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_split,
                                                        reals=reals, labels=labels, reals_target=reals_target, **D_loss_args)

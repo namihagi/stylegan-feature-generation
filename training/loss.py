@@ -7,12 +7,15 @@
 
 """Loss functions."""
 
+import numpy as np
 import tensorflow as tf
 import dnnlib.tflib as tflib
 from dnnlib.tflib.autosummary import autosummary
 
 #----------------------------------------------------------------------------
 # Convenience func that casts all of its arguments to tf.float32.
+from training.network_face_detector import FaceDetector
+
 
 def fp32(*values):
     if len(values) == 1 and isinstance(values[0], tuple):
@@ -128,13 +131,25 @@ def G_logistic_saturating(G, D, opt, training_set, minibatch_size): # pylint: di
     loss = -tf.nn.softplus(fake_scores_out)  # log(1 - logistic(fake_scores_out))
     return loss
 
-def G_logistic_nonsaturating(G, D, Detector_use, opt, training_set, minibatch_size, reals_target): # pylint: disable=unused-argument
+def G_logistic_nonsaturating(G, D, opt, training_set, minibatch_size,
+                             Detector_reuse, Detector_lod, reals_target, labels_target): # pylint: disable=unused-argument
+    def detection_loss(G_loss, fake_features):
+        with tf.control_dependencies([G_loss]):
+            dummy_images = tf.random_normal([minibatch_size, 1024, 1024, 3])
+            fake_features_transpose = tf.transpose(fake_features, [0, 2, 3, 1])  # from NCHW to NHWC
+            detector = FaceDetector(dummy_images, fake_features_transpose, Detector_reuse)
+            detector_loss = detector.loss(labels_target)
+            return G_loss + detector_loss['localization_loss'] + detector_loss['classification_loss']
+
     # latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     labels = training_set.get_random_labels_tf(minibatch_size)
-    fake_images_out = G.get_output_for(reals_target, is_training=True)
-    fake_scores_out = fp32(D.get_output_for(fake_images_out, labels, is_training=True))
+    # generator
+    fake_features_out = G.get_output_for(reals_target, is_training=True)
+    fake_scores_out = fp32(D.get_output_for(fake_features_out, labels, is_training=True))
     loss = tf.nn.softplus(-fake_scores_out)  # -log(logistic(fake_scores_out))
-    return loss
+    # face detector
+    total_loss = tf.cond((Detector_lod > 1.0), lambda: loss, detection_loss(loss, fake_features_out))
+    return total_loss
 
 def D_logistic(G, D, opt, training_set, minibatch_size, reals, labels): # pylint: disable=unused-argument
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])

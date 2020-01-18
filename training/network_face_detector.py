@@ -1,3 +1,4 @@
+import numpy as np
 import tensorflow as tf
 
 from training.src_for_face_detector import AnchorGenerator
@@ -5,17 +6,20 @@ from training.src_for_face_detector import Detector
 from training.src_for_face_detector.network_input_feature import FeatureExtractor
 
 
-def FaceDetector(images, features):
+def FaceDetector(images, features, reuse=False):
     images = images.set_shape([None, None, None, 3])
     features = features.set_shape([None, 32, 32, 128])
 
     with tf.variable_scope('student'):
-        tf.get_variable_scope().reuse_variables()
+        if reuse:
+            tf.get_variable_scope().reuse_variables()
+
+        detector_lod = tf.get_variable('lod', initializer=np.float32(0), trainable=False)
 
         feature_extractor = FeatureExtractor(is_training=True)
         anchor_generator = AnchorGenerator()
         detector = Detector(features, images, feature_extractor, anchor_generator)
-        return detector
+        return detector, detector_lod
 
         # with tf.name_scope('student_prediction'):
         #     prediction = detector.get_predictions(

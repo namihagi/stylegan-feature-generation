@@ -85,7 +85,7 @@ class Detector:
             )
         return {'boxes': boxes, 'scores': scores, 'num_boxes': num_detections}
 
-    def loss(self, groundtruth, params):
+    def loss(self, groundtruth):
         """Compute scalar loss tensors with respect to provided groundtruth.
 
         Arguments:
@@ -152,13 +152,13 @@ class Detector:
                     location_losses, cls_losses,
                     self.class_predictions_with_background,
                     matches, decoded_boxes,
-                    loss_to_use=params['loss_to_use'],
-                    loc_loss_weight=params['loc_loss_weight'],
-                    cls_loss_weight=params['cls_loss_weight'],
-                    num_hard_examples=params['num_hard_examples'],
-                    nms_threshold=params['nms_threshold'],
-                    max_negatives_per_positive=params['max_negatives_per_positive'],
-                    min_negatives_per_image=params['min_negatives_per_image']
+                    loss_to_use="classification",
+                    loc_loss_weight=0.0,
+                    cls_loss_weight=1.0,
+                    num_hard_examples=500,
+                    nms_threshold=0.99,
+                    max_negatives_per_positive=3.0,
+                    min_negatives_per_image=30
                 )
                 return {'localization_loss': location_loss / normalizer, 'classification_loss': cls_loss / normalizer}
 
