@@ -395,7 +395,7 @@ def G_mapping(
     act, gain = {'relu': (tf.nn.relu, np.sqrt(2)), 'lrelu': (leaky_relu, np.sqrt(2))}[mapping_nonlinearity]
 
     # Inputs.
-    latents_in.set_shape([None, 32, 32, 128])
+    latents_in.set_shape([None, 128, 32, 32])
     labels_in.set_shape([None, label_size])
     latents_in = tf.cast(latents_in, dtype)
     labels_in = tf.cast(labels_in, dtype)
