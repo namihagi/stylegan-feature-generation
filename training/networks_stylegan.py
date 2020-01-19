@@ -483,13 +483,13 @@ def FE_basic(
     images_in = tf.cast(images_in, dtype)
 
     with tf.variable_scope('Conv%d' % 1):
-        x = tf.nn.crelu(apply_bias(conv2d(images_in, fmaps=24, kernel=7, stride=2, gain=gain, use_wscale=use_wscale)))
+        x = tf.nn.crelu(apply_bias(conv2d(images_in, fmaps=24, kernel=7, stride=2, gain=gain, use_wscale=use_wscale)), axis=1)
 
     with tf.variable_scope('MaxPool%d' % 1):
         x = max_pool2d(x, kernel=3, stride=2)
 
     with tf.variable_scope('Conv%d' % 2):
-        x = tf.nn.crelu(apply_bias(conv2d(x, fmaps=64, kernel=5, stride=2, gain=gain, use_wscale=use_wscale)))
+        x = tf.nn.crelu(apply_bias(conv2d(x, fmaps=64, kernel=5, stride=2, gain=gain, use_wscale=use_wscale)), axis=1)
 
     with tf.variable_scope('MaxPool%d' % 2):
         x = max_pool2d(x, kernel=3, stride=2)
