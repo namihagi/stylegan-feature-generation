@@ -26,7 +26,8 @@ if 1:
     D             = EasyDict(func_name='training.networks_stylegan.D_basic')               # Options for discriminator network.
     G_opt         = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                          # Options for generator optimizer.
     D_opt         = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                          # Options for discriminator optimizer.
-    G_loss        = EasyDict(func_name='training.loss.G_logistic_nonsaturating')           # Options for generator loss.
+    G_loss        = EasyDict(func_name='training.loss.G_logistic_nonsaturating',
+                             lambda_cons=1.0)                                              # Options for generator loss.
     D_loss        = EasyDict(func_name='training.loss.D_logistic_simplegp', r1_gamma=10.0) # Options for discriminator loss.
     dataset       = EasyDict()                                                             # Options for load_dataset().
     dataset_target= EasyDict()                                                             # Options for load_dataset().
@@ -60,7 +61,7 @@ if 1:
     # wider-face feature
     # max: 14.69332
     # min: 0.000000
-    desc += '-fe-map-syn-wider-aeroplane512';    dataset = EasyDict(tfrecord_dir='wider-face', resolution=32, dynamic_range=[0.0, 14.8], num_threads=16)
+    desc += '-cycle-wider-aeroplane512';    dataset = EasyDict(tfrecord_dir='wider-face', resolution=32, dynamic_range=[0.0, 14.8], num_threads=16)
     dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=512, num_threads=16);    train.mirror_augment = False
 
     # Number of GPUs.

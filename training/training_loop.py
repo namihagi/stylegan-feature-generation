@@ -155,15 +155,18 @@ def training_loop(
         if resume_run_id is not None:
             network_pkl = misc.locate_network_pkl(resume_run_id, resume_snapshot)
             print('Loading networks from "%s"...' % network_pkl)
-            G, F, D, Gs, Fs = misc.load_pkl(network_pkl)
+            G_A2B, G_B2A, F, D_A, D_B, Gs_A2B, Gs_B2A, Fs = misc.load_pkl(network_pkl)
         else:
             print('Constructing networks...')
-            G = tflib.Network('G', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
+            G_A2B = tflib.Network('G_A2B', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
+            G_B2A = tflib.Network('G_B2A', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
             F = tflib.Network('F', num_channels=3, resolution=512, **F_args)
-            D = tflib.Network('D', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
-            Gs = G.clone('Gs')
+            D_A = tflib.Network('D_A', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
+            D_B = tflib.Network('D_B', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
+            Gs_A2B = G_A2B.clone('Gs_A2B')
+            Gs_B2A = G_B2A.clone('Gs_B2A')
             Fs = F.clone('Fs')
-    G.print_layers(); D.print_layers(); F.print_layers()
+    G_A2B.print_layers(); G_B2A.print_layers(); D_A.print_layers(); D_B.print_layers(); F.print_layers()
 
     print('Building TensorFlow graph...')
     with tf.name_scope('Inputs'), tf.device('/cpu:0'):
@@ -179,10 +182,13 @@ def training_loop(
     D_opt = tflib.Optimizer(name='TrainD', learning_rate=lrate_in, **D_opt_args)
     for gpu in range(submit_config.num_gpus):
         with tf.name_scope('GPU%d' % gpu), tf.device('/gpu:%d' % gpu):
-            G_gpu = G if gpu == 0 else G.clone(G.name + '_shadow')
+            G_A2B_gpu = G_A2B if gpu == 0 else G_A2B.clone(G_A2B.name + '_shadow')
+            G_B2A_gpu = G_B2A if gpu == 0 else G_B2A.clone(G_B2A.name + '_shadow')
             F_gpu = F if gpu == 0 else F.clone(F.name + '_shadow')
-            D_gpu = D if gpu == 0 else D.clone(D.name + '_shadow')
-            lod_assign_ops = [tf.assign(G_gpu.find_var('lod'), lod_in), tf.assign(D_gpu.find_var('lod'), lod_in)]
+            D_A_gpu = D_A if gpu == 0 else D_A.clone(D_A.name + '_shadow')
+            D_B_gpu = D_B if gpu == 0 else D_B.clone(D_B.name + '_shadow')
+            lod_assign_ops = [tf.assign(G_A2B_gpu.find_var('lod'), lod_in), tf.assign(G_B2A_gpu.find_var('lod'), lod_in),
+                              tf.assign(D_A_gpu.find_var('lod'), lod_in), tf.assign(D_B_gpu.find_var('lod'), lod_in)]
             reals, labels = training_set.get_minibatch_tf()
             reals = process_reals(reals, lod_in, mirror_augment, training_set.dynamic_range, drange_net)
             # ----- add -----
@@ -190,19 +196,26 @@ def training_loop(
             reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_set.dynamic_range, drange_net)
             # ---------------
             with tf.name_scope('G_loss'), tf.control_dependencies(lod_assign_ops):
-                G_loss = dnnlib.util.call_func_by_name(G=G_gpu, F=F_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_split,
-                                                       reals_target=reals_target, **G_loss_args)
+                G_loss = dnnlib.util.call_func_by_name(G_A2B=G_A2B_gpu, G_B2A=G_B2A_gpu, F=F_gpu, D_A=D_A_gpu, D_B=D_B_gpu,
+                                                       reals_image_A=reals_target, reals_feat_B=reals, opt=G_opt,
+                                                       training_set=training_set, minibatch_size=minibatch_split, **G_loss_args)
             with tf.name_scope('D_loss'), tf.control_dependencies(lod_assign_ops):
-                D_loss = dnnlib.util.call_func_by_name(G=G_gpu, F=F_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_split,
-                                                       reals=reals, labels=labels, reals_target=reals_target, **D_loss_args)
+                D_loss = dnnlib.util.call_func_by_name(G_A2B=G_A2B_gpu, G_B2A=G_B2A_gpu, F=F_gpu, D_A=D_A_gpu, D_B=D_B_gpu,
+                                                       reals_image_A=reals_target, reals_feat_B=reals, labels_A=labels_target, labels_B=labels,
+                                                       opt=D_opt, training_set=training_set, minibatch_size=minibatch_split, **D_loss_args)
             # gather trainables
-            G_trainables = OrderedDict([(k,v) for k,v in G_gpu.trainables.items()] + [(k,v) for k,v in F_gpu.trainables.items()])
+            G_trainables = OrderedDict([(k,v) for k,v in G_A2B_gpu.trainables.items()]
+                                       + [(k, v) for k, v in G_B2A_gpu.trainables.items()]
+                                       + [(k,v) for k,v in F_gpu.trainables.items()])
+            D_trainables = OrderedDict([(k, v) for k, v in D_A_gpu.trainables.items()]
+                                       + [(k, v) for k, v in D_B_gpu.trainables.items()])
             G_opt.register_gradients(tf.reduce_mean(G_loss), G_trainables)
-            D_opt.register_gradients(tf.reduce_mean(D_loss), D_gpu.trainables)
+            D_opt.register_gradients(tf.reduce_mean(D_loss), D_trainables)
     G_train_op = G_opt.apply_updates()
     D_train_op = D_opt.apply_updates()
 
-    Gs_update_op = Gs.setup_as_moving_average_of(G, beta=Gs_beta)
+    Gs_A2B_update_op = Gs_A2B.setup_as_moving_average_of(G_A2B, beta=Gs_beta)
+    Gs_B2A_update_op = Gs_B2A.setup_as_moving_average_of(G_B2A, beta=Gs_beta)
     Fs_update_op = Fs.setup_as_moving_average_of(F, beta=Fs_beta)
     with tf.device('/gpu:0'):
         try:
@@ -215,7 +228,9 @@ def training_loop(
     if save_tf_graph:
         summary_log.add_graph(tf.get_default_graph())
     if save_weight_histograms:
-        G.setup_weight_histograms(); D.setup_weight_histograms(); F.setup_weight_histograms()
+        G_A2B.setup_weight_histograms(); G_B2A.setup_weight_histograms()
+        F.setup_weight_histograms()
+        D_A.setup_weight_histograms(); D_B.setup_weight_histograms()
     metrics = metric_base.MetricGroup(metric_arg_list)
 
     print('Training...\n')
@@ -241,7 +256,8 @@ def training_loop(
         # Run training ops.
         for _mb_repeat in range(minibatch_repeats):
             for _D_repeat in range(D_repeats):
-                tflib.run([D_train_op, Gs_update_op, Fs_update_op], {lod_in: sched.lod, lrate_in: sched.D_lrate, minibatch_in: sched.minibatch})
+                tflib.run([D_train_op, Gs_A2B_update_op, Gs_B2A_update_op, Fs_update_op],
+                          {lod_in: sched.lod, lrate_in: sched.D_lrate, minibatch_in: sched.minibatch})
                 cur_nimg += sched.minibatch
             tflib.run([G_train_op], {lod_in: sched.lod, lrate_in: sched.G_lrate, minibatch_in: sched.minibatch})
 
@@ -270,7 +286,7 @@ def training_loop(
             # Save snapshots.
             if cur_tick % network_snapshot_ticks == 0 or done or cur_tick == 1:
                 pkl = os.path.join(submit_config.run_dir, 'network-snapshot-%06d.pkl' % (cur_nimg // 1000))
-                misc.save_pkl((G, D, F, Gs, Fs), pkl)
+                misc.save_pkl((G_A2B, G_B2A, F, D_A, D_B, Gs_A2B, Gs_B2A, Fs), pkl)
 
             # Update summaries and RunContext.
             metrics.update_autosummaries()
@@ -279,7 +295,7 @@ def training_loop(
             maintenance_time = ctx.get_last_update_interval() - tick_time
 
     # Write final results.
-    misc.save_pkl((G, D, F, Gs, Fs), os.path.join(submit_config.run_dir, 'network-final.pkl'))
+    misc.save_pkl((G_A2B, G_B2A, F, D_A, D_B, Gs_A2B, Gs_B2A, Fs), os.path.join(submit_config.run_dir, 'network-final.pkl'))
     summary_log.close()
 
     ctx.close()
