@@ -395,11 +395,19 @@ def G_mapping(
     act, gain = {'relu': (tf.nn.relu, np.sqrt(2)), 'lrelu': (leaky_relu, np.sqrt(2))}[mapping_nonlinearity]
 
     # Inputs.
-    latents_in.set_shape([None, latent_size])
+    latents_in.set_shape([None, 32, 32, 128])
     labels_in.set_shape([None, label_size])
     latents_in = tf.cast(latents_in, dtype)
     labels_in = tf.cast(labels_in, dtype)
     x = latents_in
+
+    # convert feature to latents
+    with tf.variable_scope('GAPool%d' % 1):
+        x = tf.reduce_mean(x, axis=[2, 3])
+    with tf.variable_scope('DenseLatents'):
+        x = dense(x, fmaps=512, gain=gain, use_wscale=use_wscale, lrmul=mapping_lrmul)
+        x = apply_bias(x, lrmul=mapping_lrmul)
+        x = act(x)
 
     # Embed labels and concatenate them with latents.
     if label_size:
@@ -443,6 +451,29 @@ def FE_basic(
     dtype               = 'float32',    # Data type to use for activations and outputs.
     **_kwargs):                         # Ignore unrecognized keyword args.
 
+    def inception(x):
+        # path1
+        with tf.variable_scope('Conv%d' % 1):
+            x1 = apply_bias(conv2d(x, fmaps=32, kernel=1, stride=1, gain=gain, use_wscale=use_wscale))
+        # path2
+        with tf.variable_scope('MaxPool%d' % 1):
+            y2 = max_pool2d(x, kernel=3, stride=1)
+        with tf.variable_scope('Conv%d' % 2):
+            x2 = apply_bias(conv2d(y2, fmaps=32, kernel=1, gain=gain, use_wscale=use_wscale))
+        # path3
+        with tf.variable_scope('Conv%d_%d' % (3, 1)):
+            y3 = apply_bias(conv2d(x, fmaps=24, kernel=1, gain=gain, use_wscale=use_wscale))
+        with tf.variable_scope('Conv%d_%d' % (3, 2)):
+            x3 = apply_bias(conv2d(y3, fmaps=32, kernel=3, gain=gain, use_wscale=use_wscale))
+        # path4
+        with tf.variable_scope('Conv%d_%d' % (4, 1)):
+            y4_1 = apply_bias(conv2d(x, fmaps=24, kernel=1, gain=gain, use_wscale=use_wscale))
+        with tf.variable_scope('Conv%d_%d' % (4, 2)):
+            y4_2 = apply_bias(conv2d(y4_1, fmaps=32, kernel=3, gain=gain, use_wscale=use_wscale))
+        with tf.variable_scope('Conv%d_%d' % (4, 3)):
+            x4 = apply_bias(conv2d(y4_2, fmaps=32, kernel=3, gain=gain, use_wscale=use_wscale))
+        return tf.concat([x1, x2, x3, x4], axis=1)
+
     resolution_log2 = int(np.log2(resolution))
     assert resolution == 2**resolution_log2 and resolution >= 4
 
@@ -452,7 +483,7 @@ def FE_basic(
     images_in = tf.cast(images_in, dtype)
 
     with tf.variable_scope('Conv%d' % 1):
-        x = tf.nn.crelu(apply_bias(conv2d(images_in, fmaps=24, kernel=7, stride=4, gain=gain, use_wscale=use_wscale)))
+        x = tf.nn.crelu(apply_bias(conv2d(images_in, fmaps=24, kernel=7, stride=2, gain=gain, use_wscale=use_wscale)))
 
     with tf.variable_scope('MaxPool%d' % 1):
         x = max_pool2d(x, kernel=3, stride=2)
@@ -463,19 +494,12 @@ def FE_basic(
     with tf.variable_scope('MaxPool%d' % 2):
         x = max_pool2d(x, kernel=3, stride=2)
 
-    with tf.variable_scope('Conv%d' % 3):
-        x = act(apply_bias(conv2d(x, fmaps=64, kernel=5, stride=2, gain=gain, use_wscale=use_wscale)))
-
-    with tf.variable_scope('Conv%d' % 4):
-        x = act(apply_bias(conv2d(x, fmaps=512, kernel=1, gain=gain, use_wscale=use_wscale)))
-
-    with tf.variable_scope('GAPool%d' % 1):
-        x = tf.reduce_mean(x, axis=[2,3])
-
-    with tf.variable_scope('Dense%d' % 1):
-        x = dense(x, fmaps=512, gain=gain, use_wscale=use_wscale, lrmul=mapping_lrmul)
-        x = apply_bias(x, lrmul=mapping_lrmul)
-        x = act(x)
+    with tf.variable_scope('Inception%d' % 1):
+        x = inception(x)
+    with tf.variable_scope('Inception%d' % 2):
+        x = inception(x)
+    with tf.variable_scope('Inception%d' % 3):
+        x = inception(x)
 
     # Output.
     assert x.dtype == tf.as_dtype(dtype)
