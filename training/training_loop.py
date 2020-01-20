@@ -192,7 +192,7 @@ def training_loop(
             reals, labels = training_set.get_minibatch_tf()
             reals = process_reals(reals, lod_in, mirror_augment, training_set.dynamic_range, drange_net)
             # ----- add -----
-            reals_target, labels_target = training_target_set.get_minibatch_tf()
+            reals_target, boxes_target, num_boxes_target,  labels_target = training_target_set.get_minibatch_tf()
             reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_set.dynamic_range, drange_net)
             # ---------------
             with tf.name_scope('G_loss'), tf.control_dependencies(lod_assign_ops):

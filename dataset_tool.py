@@ -13,6 +13,8 @@ import sys
 import glob
 import argparse
 import threading
+
+import json
 import six.moves.queue as Queue # pylint: disable=import-error
 import traceback
 import numpy as np
@@ -27,6 +29,11 @@ from training import dataset
 def error(msg):
     print('Error: ' + msg)
     exit(1)
+
+#----------------------------------------------------------------------------
+
+def _float_list_feature(value):
+    return tf.train.Feature(float_list=tf.train.FloatList(value=value))
 
 #----------------------------------------------------------------------------
 
@@ -88,7 +95,7 @@ class TFRecordExporter:
             tfr_writer.write(ex.SerializeToString())
         self.cur_images += 1
 
-    def add_npy(self, img):
+    def add_npy(self, img, anno_dict):
         if self.print_progress and self.cur_images % self.progress_interval == 0:
             print('%d / %d\r' % (self.cur_images, self.expected_images), end='', flush=True)
         if self.shape is None:
@@ -106,11 +113,56 @@ class TFRecordExporter:
             if lod:
                 img = img.astype(np.float32)
                 img = (img[:, 0::2, 0::2] + img[:, 0::2, 1::2] + img[:, 1::2, 0::2] + img[:, 1::2, 1::2]) * 0.25
-            # quant = np.rint(img).clip(0, 255).astype(np.uint8)
             quant = img.astype(np.float32)
             ex = tf.train.Example(features=tf.train.Features(feature={
                 'shape': tf.train.Feature(int64_list=tf.train.Int64List(value=quant.shape)),
                 'data': tf.train.Feature(bytes_list=tf.train.BytesList(value=[quant.tostring()]))}))
+            tfr_writer.write(ex.SerializeToString())
+        self.cur_images += 1
+
+    def add_npy_with_labels(self, img, annotation):
+        if self.print_progress and self.cur_images % self.progress_interval == 0:
+            print('%d / %d\r' % (self.cur_images, self.expected_images), end='', flush=True)
+        if self.shape is None:
+            self.shape = img.shape
+            self.resolution_log2 = int(np.log2(self.shape[1]))
+            assert self.shape[0] in [128] # [1,3] ==> [128]
+            assert self.shape[1] == self.shape[2]
+            assert self.shape[1] == 2**self.resolution_log2
+            tfr_opt = tf.python_io.TFRecordOptions(tf.python_io.TFRecordCompressionType.NONE)
+            for lod in range(self.resolution_log2 - 1):
+                tfr_file = self.tfr_prefix + '-r%02d.tfrecords' % (self.resolution_log2 - lod)
+                self.tfr_writers.append(tf.python_io.TFRecordWriter(tfr_file, tfr_opt))
+        assert img.shape == self.shape
+
+        # preprocess boxes
+        width = int(annotation['size']['width'])
+        height = int(annotation['size']['height'])
+        ymin, xmin, ymax, xmax = [], [], [], []
+        for obj in annotation['object']:
+            a = float(obj['bndbox']['ymin']) / height
+            b = float(obj['bndbox']['xmin']) / width
+            c = float(obj['bndbox']['ymax']) / height
+            d = float(obj['bndbox']['xmax']) / width
+            assert (a < c) and (b < d)
+            ymin.append(a)
+            xmin.append(b)
+            ymax.append(c)
+            xmax.append(d)
+
+        for lod, tfr_writer in enumerate(self.tfr_writers):
+            if lod:
+                img = img.astype(np.float32)
+                img = (img[:, 0::2, 0::2] + img[:, 0::2, 1::2] + img[:, 1::2, 0::2] + img[:, 1::2, 1::2]) * 0.25
+            quant = img.astype(np.float32)
+            ex = tf.train.Example(features=tf.train.Features(feature={
+                'shape': tf.train.Feature(int64_list=tf.train.Int64List(value=quant.shape)),
+                'data': tf.train.Feature(bytes_list=tf.train.BytesList(value=[quant.tostring()])),
+                'xmin': _float_list_feature(xmin),
+                'xmax': _float_list_feature(xmax),
+                'ymin': _float_list_feature(ymin),
+                'ymax': _float_list_feature(ymax)
+            }))
             tfr_writer.write(ex.SerializeToString())
         self.cur_images += 1
 
@@ -575,9 +627,43 @@ def create_from_numpy(tfrecord_dir, image_dir, shuffle):
     with TFRecordExporter(tfrecord_dir, len(image_filenames)) as tfr:
         order = tfr.choose_shuffled_order() if shuffle else np.arange(len(image_filenames))
         for idx in range(order.size):
-            img = np.load(image_filenames[order[idx]])
+            image_path = image_filenames[order[idx]]
+            img = np.load(image_path)
             img = img.transpose([2, 0, 1]) # HWC => CHW
             tfr.add_npy(img)
+
+#----------------------------------------------------------------------------
+
+def create_from_feature_with_labels(tfrecord_dir, feature_dir, anno_dir, shuffle):
+    print('Loading npy from "%s"' % feature_dir)
+    feature_filenames = sorted(glob.glob(os.path.join(feature_dir, '*.npy')))
+    if len(feature_filenames) == 0:
+        error('No input npy found')
+
+    feat = np.load(feature_filenames[0])
+    resolution = feat.shape[0]
+    channels = feat.shape[2] if feat.ndim == 3 else 1
+    if feat.shape[1] != resolution:
+        error('Input features must have the same width and height')
+    if resolution != 2 ** int(np.floor(np.log2(resolution))):
+        error('Input feature resolution must be a power-of-two')
+    if channels not in [128]:
+        error('shape must be (32, 32, 128)')
+    # if channels not in [1, 3]:
+    #     error('Input features must be stored as RGB or grayscale')
+
+    with TFRecordExporter(tfrecord_dir, len(feature_filenames)) as tfr:
+        order = tfr.choose_shuffled_order() if shuffle else np.arange(len(feature_filenames))
+        for idx in range(order.size):
+            # load npy
+            feature_path = feature_filenames[order[idx]]
+            feat = np.load(feature_path)
+            feat = feat.transpose([2, 0, 1]) # HWC => CHW
+            # load annotation
+            annotation_filename = feature_path.split('/')[-1].replace('.npy', '.json')
+            annotation_path = os.path.join(anno_dir, annotation_filename)
+            anno_dict = json.load(open(annotation_path))
+            tfr.add_npy_with_labels(feat, anno_dict)
 
 #----------------------------------------------------------------------------
 
@@ -684,6 +770,13 @@ def execute_cmdline(argv):
                     'create_from_numpy datasets/mydataset myimagedir')
     p.add_argument('tfrecord_dir', help='New dataset directory to be created')
     p.add_argument('image_dir', help='Directory containing the numpy')
+    p.add_argument('--shuffle', help='Randomize image order (default: 1)', type=int, default=1)
+
+    p = add_command('create_from_feature_with_labels', 'Create dataset from a directory full of numpy with annotations.',
+                    'create_from_numpy datasets/mydataset myimagedir')
+    p.add_argument('tfrecord_dir', help='New dataset directory to be created')
+    p.add_argument('feature_dir', help='Directory containing the numpy')
+    p.add_argument('anno_dir', help='Directory containing the numpy')
     p.add_argument('--shuffle', help='Randomize image order (default: 1)', type=int, default=1)
     # ----- new added -----
 

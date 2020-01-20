@@ -24,6 +24,26 @@ def parse_tfrecord_tf(record):
     data = tf.decode_raw(features['data'], tf.float32)
     return tf.reshape(data, features['shape'])
 
+def parse_tfrecord_tf_with_annotations(record):
+    features = tf.parse_single_example(record, features={
+        'shape': tf.FixedLenFeature([3], tf.int64),
+        'data': tf.FixedLenFeature([], tf.string),
+        'ymin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
+        'xmin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
+        'ymax': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
+        'xmax': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
+    })
+    # decode
+    data = tf.decode_raw(features['data'], tf.float32)
+    boxes = tf.stack([
+        features['ymin'], features['xmin'],
+        features['ymax'], features['xmax']
+    ], axis=1)
+    boxes = tf.to_float(boxes)
+    boxes = tf.clip_by_value(boxes, clip_value_min=0.0, clip_value_max=1.0)
+    num_boxes = tf.to_int32(tf.shape(boxes)[0])
+    return tf.reshape(data, features['shape']),  boxes, num_boxes
+
 def parse_tfrecord_np(record):
     ex = tf.train.Example()
     ex.ParseFromString(record)
@@ -39,6 +59,7 @@ class TFRecordDataset:
         tfrecord_dir,               # Directory containing a collection of tfrecords files.
         resolution      = None,     # Dataset resolution, None = autodetect.
         label_file      = None,     # Relative path of the labels file, None = autodetect.
+        with_annotation = False,    # False => parse_tfrecord_tf, True => parse_tfrecord_tf_with_annotations
         dynamic_range   = [0, 255],
         max_label_size  = 0,        # 0 = no labels, 'full' = full labels, <int> = N first label components.
         repeat          = True,     # Repeat dataset indefinitely.
@@ -66,6 +87,8 @@ class TFRecordDataset:
         self._tf_minibatch_np   = None
         self._cur_minibatch     = -1
         self._cur_lod           = -1
+
+        parse_tfrecord_tf_fn = parse_tfrecord_tf_with_annotations if with_annotation else parse_tfrecord_tf
 
         # List tfrecords files and inspect their shapes.
         assert os.path.isdir(self.tfrecord_dir)
@@ -119,7 +142,7 @@ class TFRecordDataset:
                 if tfr_lod < 0:
                     continue
                 dset = tf.data.TFRecordDataset(tfr_file, compression_type='', buffer_size=buffer_mb<<20)
-                dset = dset.map(parse_tfrecord_tf, num_parallel_calls=num_threads)
+                dset = dset.map(parse_tfrecord_tf_fn, num_parallel_calls=num_threads)
                 dset = tf.data.Dataset.zip((dset, self._tf_labels_dataset))
                 bytes_per_item = np.prod(tfr_shape) * np.dtype(self.dtype).itemsize
                 if shuffle_mb > 0:
