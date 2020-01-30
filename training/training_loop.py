@@ -193,7 +193,7 @@ def training_loop(
             reals = process_reals(reals, lod_in, mirror_augment, training_set.dynamic_range, drange_net)
             # ----- add -----
             reals_target, labels_target = training_target_set.get_minibatch_tf()
-            reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_set.dynamic_range, drange_net)
+            reals_target = process_reals(reals_target, lod_fe_in, mirror_augment, training_target_set.dynamic_range, drange_net)
             # ---------------
             with tf.name_scope('G_loss'), tf.control_dependencies(lod_assign_ops):
                 G_loss = dnnlib.util.call_func_by_name(G_A2B=G_A2B_gpu, G_B2A=G_B2A_gpu, F=F_gpu, D_A=D_A_gpu, D_B=D_B_gpu,
@@ -201,7 +201,7 @@ def training_loop(
                                                        training_set=training_set, minibatch_size=minibatch_split, **G_loss_args)
             with tf.name_scope('D_loss'), tf.control_dependencies(lod_assign_ops):
                 D_loss = dnnlib.util.call_func_by_name(G_A2B=G_A2B_gpu, G_B2A=G_B2A_gpu, F=F_gpu, D_A=D_A_gpu, D_B=D_B_gpu,
-                                                       reals_image_A=reals_target, reals_feat_B=reals, labels_A=labels_target, labels_B=labels,
+                                                       reals_image_A=reals_target, reals_feat_B=reals,
                                                        opt=D_opt, training_set=training_set, minibatch_size=minibatch_split, **D_loss_args)
             # gather trainables
             G_trainables = OrderedDict([(k,v) for k,v in G_A2B_gpu.trainables.items()]

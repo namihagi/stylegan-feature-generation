@@ -27,7 +27,7 @@ if 1:
     G_opt         = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                          # Options for generator optimizer.
     D_opt         = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                          # Options for discriminator optimizer.
     G_loss        = EasyDict(func_name='training.loss.G_logistic_nonsaturating',
-                             lambda_cons=1.0)                                              # Options for generator loss.
+                             lambda_cons=10.0)                                              # Options for generator loss.
     D_loss        = EasyDict(func_name='training.loss.D_logistic_simplegp', r1_gamma=10.0) # Options for discriminator loss.
     dataset       = EasyDict()                                                             # Options for load_dataset().
     dataset_target= EasyDict()                                                             # Options for load_dataset().
@@ -50,19 +50,19 @@ if 1:
     # desc += '-ffhq-feature-normalized';      dataset = EasyDict(tfrecord_dir='normalized-feature', resolution=32);        train.mirror_augment = False
     # desc += '-ffhq-feature-log';      dataset = EasyDict(tfrecord_dir='log-feature', resolution=32);        train.mirror_augment = False
 
-    # # ffhq feature
-    # # base image range. if use feature, need to change
-    # # base          [0.0, 15.1]
-    # # normalized    [-0.4, 28.3]
-    # # log           [0.0, 2.8]
-    # desc += '-ffhq-base-aeroplane';    dataset = EasyDict(tfrecord_dir='base-feature', resolution=32, dynamic_range=[0.0, 15.1], num_threads=16)
-    # dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=1024, num_threads=16);    train.mirror_augment = False
+    # ffhq feature
+    # base image range. if use feature, need to change
+    # base          [0.0, 15.1]
+    # normalized    [-0.4, 28.3]
+    # log           [0.0, 2.8]
+    desc += '-cycle-aeroplane-only2ffhq-512';    dataset = EasyDict(tfrecord_dir='base-feature', resolution=32, dynamic_range=[0.0, 15.1], num_threads=16)
+    dataset_target = EasyDict(tfrecord_dir='aeroplane-only', resolution=512, num_threads=16);    train.mirror_augment = False
 
-    # wider-face feature
-    # max: 14.69332
-    # min: 0.000000
-    desc += '-cycle-wider-aeroplane512';    dataset = EasyDict(tfrecord_dir='wider-face', resolution=32, dynamic_range=[0.0, 14.8], num_threads=16)
-    dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=512, num_threads=16);    train.mirror_augment = False
+    # # wider-face feature
+    # # max: 14.69332
+    # # min: 0.000000
+    # desc += '-cycle-wider-aeroplane512';    dataset = EasyDict(tfrecord_dir='wider-face', resolution=32, dynamic_range=[0.0, 14.8], num_threads=16)
+    # dataset_target = EasyDict(tfrecord_dir='voc-aeroplane', resolution=512, num_threads=16);    train.mirror_augment = False
 
     # Number of GPUs.
     #desc += '-1gpu'; submit_config.num_gpus = 1; sched.minibatch_base = 4; sched.minibatch_dict = {4: 128, 8: 128, 16: 128, 32: 64, 64: 32, 128: 16, 256: 8, 512: 4}
@@ -72,7 +72,7 @@ if 1:
 
     # wider-face feature
     # desc += '-4gpu'; submit_config.num_gpus = 4; sched.minibatch_base = 16; sched.minibatch_dict = {4: 64, 8: 32, 16: 16, 32: 16, 64: 16, 128: 16}
-    desc += '-8gpu'; submit_config.num_gpus = 8; sched.minibatch_base = 32; sched.minibatch_dict = {4: 128, 8: 64, 16: 32, 32: 32, 64: 32}
+    desc += '-8gpu'; submit_config.num_gpus = 8; sched.minibatch_base = 32; sched.minibatch_dict = {4: 64, 8: 64, 16: 32, 32: 32, 64: 32}
 
     # Default options.
     train.total_kimg = 25000
